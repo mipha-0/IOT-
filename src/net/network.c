@@ -1,3 +1,38 @@
+/**
+ * @file    network.c
+ * @brief   网络通信模块(TCP 客户端 + HTTP 天气拉取)
+ *
+ * @details 提供 3 个对内线程入口与 1 个对外 HTTP 接口:
+ *
+ *  线程:
+ *  - client            : TCP 客户端主线程,连接服务器后启动收发子线程,
+ *                         断线自动重连(5 秒间隔);
+ *  - get_news (子线程)  : 接收服务器下发的 JSON 命令,解析后更新共享状态
+ *                         (LED/蜂鸣器/温湿度阈值),唤醒硬件线程,推 UI 事件;
+ *  - send_news(子线程) : 每 5 秒打包当前温湿度/阈值/设备状态为 JSON 上报。
+ *
+ *  对外接口:
+ *  - httprequest_weather(): 向 seniverse API 发起 HTTP GET 拉取广州实时天气,
+ *                           返回 temp_humi_t 结构体。
+ *
+ *  命令格式(JSON):
+ *    {"command_name":"LED","paras":{"LED开关":1}}
+ *    {"command_name":"蜂鸣器","paras":{"蜂鸣器开关":0}}
+ *    {"command_name":"温度阈值","paras":{"temp_threshold":35}}
+ *    {"command_name":"湿度阈值","paras":{"humi_threshold":50}}
+ *
+ *  依赖关系:
+ *  - 共享状态: mock_temp/mock_humi + th_rwlock(读)
+ *              temp_threshold/humi_threshold + threshold_rwlock(写)
+ *              LED_status/BEEP_status/connect_event + status_mutex(写)
+ *  - 硬件唤醒: led_cond / beep_cond
+ *  - UI 通信: push_pending_event() / request_threshold_refresh()
+ *  - 第三方: cJSON(解析与生成)
+ *
+ * @note    服务器地址硬编码 192.168.44.21:8888;天气 API key 硬编码。
+ *          修改需重新编译。多客户端连接时 cli_socket_fd 单值覆盖(已知限制)。
+ */
+
 #include <stdio.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -18,6 +53,28 @@
 ====================================================*/
 
 /*===================== 接收线程 =====================*/
+/**
+ * @brief   命令接收子线程(由 client 创建)
+ * @param   arg  指向已连接 socket fd 的指针(int*)
+ * @return  对端关闭或 recv 出错时返回 NULL
+ *
+ * @details 循环接收 JSON 命令并分发:
+ *          1. recv 读取数据,ret<=0 表示对端关闭,退出循环;
+ *          2. cJSON_Parse 解析,失败打印日志并 continue;
+ *          3. 取 command_name 与 paras 字段,缺一不可;
+ *          4. 按 command_name 分支:
+ *             - "LED"      : 写 LED_status + 需要时发 led_cond 信号
+ *             - "蜂鸣器"    : 写 BEEP_status + 需要时发 beep_cond 信号
+ *             - "温度阈值"  : 写 temp_threshold,cfg_saved=false
+ *             - "湿度阈值"  : 写 humi_threshold,cfg_saved=false
+ *          5. cJSON_Delete 释放;
+ *          6. push_pending_event 推事件到主线程 UI 队列;
+ *          7. request_threshold_refresh 请求刷新阈值显示;
+ *          8. 若 LED/BEEP 从 OFF→ON,在锁外发 cond 信号唤醒硬件线程。
+ *
+ * @note    buf 同时被复用为接收缓冲与事件文本缓冲,通过 sprintf 改写。
+ *          signal 在锁外发送以避免持锁等待对方持锁导致死锁。
+ */
 void* get_news(void* arg)
 {
     int fd = *(int*)arg;
@@ -113,11 +170,11 @@ void* get_news(void* arg)
 
         cJSON_Delete(root);
 
-        /* 线程安全：通过 pending 队列在主线程更新 UI */
+        /* 线程安全:通过 pending 队列在主线程更新 UI */
         push_pending_event(buf);
         request_threshold_refresh();
 
-        /* 唤醒 LED/BEEP 线程（在锁外发送信号避免死锁） */
+        /* 唤醒 LED/BEEP 线程(在锁外发送信号避免死锁) */
         if(need_led_signal)
         {
             pthread_mutex_lock(&led_mutex);
@@ -136,6 +193,18 @@ void* get_news(void* arg)
 }
 
 /*===================== 发送线程 =====================*/
+/**
+ * @brief   状态上报子线程(由 client 创建)
+ * @param   arg  指向已连接 socket fd 的指针(int*)
+ * @return  send 失败时返回 NULL
+ *
+ * @details 每 5 秒打包一份 JSON 上报到服务器,字段包括:
+ *          time、temp、humi、LED、BEEP、temp_threshold、humi_threshold。
+ *          send 失败(ret<=0)即退出线程,主线程 client 会关闭 fd 后重连。
+ *
+ * @note    退出前会更新 connect_event=OFF 并推送 "connect failed" 事件,
+ *          触发事件页与系统状态卡片刷新。
+ */
 void* send_news(void* arg)
 {
     int fd = *(int*)arg;
@@ -185,6 +254,7 @@ void* send_news(void* arg)
         if(ret <= 0) break;
         sleep(5);
     }
+    /* 通知主线程连接已断开 */
     pthread_mutex_lock(&status_mutex);
     connect_event = OFF;
     pthread_mutex_unlock(&status_mutex);
@@ -195,6 +265,24 @@ void* send_news(void* arg)
 }
 
 /*===================== 客户端主线程 =====================*/
+/**
+ * @brief   TCP 客户端主线程(由 main 创建)
+ * @param   arg  线程参数(未使用)
+ * @return  socket 创建失败时返回 NULL,正常情况永不返回
+ *
+ * @details 工作流程:
+ *          1. 创建 socket,失败 perror 后退出;
+ *          2. 循环 connect 服务器(192.168.44.21:8888),
+ *             失败 sleep(5) 重试,直至成功;
+ *          3. 连接成功:更新 connect_event=ON,推 "connect success" 事件;
+ *          4. 启动 get_news、send_news 两个子线程;
+ *          5. pthread_join 等待 get_news 退出(对端断开);
+ *          6. close(fd),pthread_join send_news;
+ *          7. goto reconnect 重连。
+ *
+ * @note    重连间隔为 5 秒,避免短时间大量失败连接占满资源。
+ *          socket_fd 通过指针传递给子线程,生命周期由本函数管理。
+ */
 void* client(void* arg)
 {
 
@@ -253,7 +341,7 @@ reconnect:
 
     /* 等待接收线程结束（对端断开时退出） */
     pthread_join(get_tid, NULL);
-    /* 关闭 socket，send 线程的 send 会失败并退出 */
+    /* 关闭 socket,send 线程的 send 会失败并退出 */
     close(socket_fd);
     pthread_join(send_tid, NULL);
     goto reconnect;
@@ -261,7 +349,31 @@ reconnect:
     return NULL;
 }
 
-/*HTTP请求天气*/
+/**
+ * @brief   HTTP 请求天气数据(对外接口)
+ * @return  temp_humi_t 结构体,包含 temp 与 humi 字段;
+ *          任何错误情况下返回默认值 {35, 70}
+ *
+ * @details 工作流程:
+ *          1. gethostbyname 解析 api.seniverse.com 域名;
+ *          2. 创建 TCP socket 并 connect 到 80 端口;
+ *          3. 发送 HTTP GET 请求(广州实时天气);
+ *          4. 逐字节接收响应头,直至遇到 "\r\n\r\n" 分隔符;
+ *          5. 解析 HTTP 状态码(200~299 视为成功);
+ *          6. 解析 Content-Length 决定正文长度;
+ *          7. 接收正文(JSON),cJSON_Parse 解析;
+ *          8. 从 results[0].now.temperature / humidity 取值;
+ *          9. 释放资源并返回。
+ *
+ * 错误处理:
+ *   - DNS 失败、socket 失败、connect 失败、recv 失败、JSON 解析失败
+ *     均返回 {35, 70} 默认值,不抛出异常。
+ *
+ * @note    请求 URL 中 key=SKRr_WDhQZaxCxyxd 为 seniverse API key(硬编码)。
+ *          逐字节接收响应头效率低,但保证不会读入正文,简化逻辑。
+ *          返回的 temp_humi_t 在所有错误路径均默认 {35, 70},
+ *          调用方需注意此默认值可能掩盖真实错误。
+ */
 temp_humi_t httprequest_weather()
 {
     // 利用DNS服务查询指定域名的IP
@@ -299,7 +411,7 @@ temp_humi_t httprequest_weather()
                             "Host:api.seniverse.com\r\n\r\n");
     send(fd, request, strlen(request), 0);
 
-    // 接收对方的响应头部
+    // 接收对方的响应头部(逐字节直至 \r\n\r\n)
     char res[1024]={0x00};
     int total = 0;
     while(1)
@@ -322,6 +434,7 @@ temp_humi_t httprequest_weather()
     int ok, jsonlen = 0;
     char *retcode = res + strlen("HTTP/1.x ");
 
+    /* 解析 HTTP 状态码 */
     switch(atoi(retcode))
     {
     case 200 ... 299:

@@ -1,22 +1,59 @@
+/**
+ * @file    ui_page_event.c
+ * @brief   事件页模块:事件表格 + 3 个统计卡片
+ *
+ * @details 事件页布局:
+ *          - 左侧:事件表格(LEFT_W=520 宽,30 行 2 列)
+ *            列 0:时间(TIME_COL_W=170)
+ *            列 1:事件描述
+ *          - 右侧:3 个统计卡片(纵向排列,各 CARD_H=132 高)
+ *            卡片1:报警状态 - 今日报警累计
+ *            卡片2:命令统计 - 今日命令数 + 最近命令时间
+ *            卡片3:系统状态 - 设备状态 + 连接状态
+ *
+ *          事件写入逻辑:
+ *          - 表格行号 even_line 从 1 开始,写满 30 行后回绕到 1;
+ *          - 根据事件文本内容(alarm/command/system)分别更新对应统计卡片。
+ *
+ *          该模块的函数由主线程调用(process_pending_events 或主页更新流程),
+ *          无需考虑线程安全。
+ */
+
 #include "ui_common.h"
 #include "ui_page_event.h"
 
 #define TABLE_ROW_MAX 30   /* 表格最大行数（含表头） */
 
 static lv_obj_t *table      = NULL;   /* 事件表格 */
-static lv_obj_t *c1_sub_lbl = NULL;   /* 卡片1 - 报警累计 */
-static lv_obj_t *c2_val_lbl  = NULL;   /* 卡片2 - 命令数 */
-static lv_obj_t *c2_sub_lbl  = NULL;   /* 卡片2 - 最近命令时间 */
-static lv_obj_t *c3_val  = NULL;   /* 卡片3 - 设备状态 */
-static lv_obj_t *c3_val_lbl  = NULL;   /* 卡片3 - 连接状态 */
+static lv_obj_t *c1_sub_lbl = NULL;   /* 卡片1 - 报警累计子标签 */
+static lv_obj_t *c2_val_lbl  = NULL;   /* 卡片2 - 命令数主标签 */
+static lv_obj_t *c2_sub_lbl  = NULL;   /* 卡片2 - 最近命令时间子标签 */
+static lv_obj_t *c3_val  = NULL;      /* 卡片3 - 设备状态主标签 */
+static lv_obj_t *c3_val_lbl  = NULL;   /* 卡片3 - 连接状态子标签 */
 
 
 
-static int alarm_times   = 0;          /* 今日报警累计 */
-static int command_times = 0;          /* 今日命令累计 */
-static int even_line     = 1;          /* 下一条事件写入行号 */
+static int alarm_times   = 0;          /* 今日报警累计次数 */
+static int command_times = 0;          /* 今日命令累计次数 */
+static int even_line     = 1;          /* 下一条事件写入行号(从 1 开始,0 为表头) */
 static char recent_time[16] = {0x00};  /* 最近一次命令时间字符串 */
 
+/**
+ * @brief   创建事件页
+ * @param   parent  父页面容器(pages[PAGE_EVENT])
+ *
+ * @details 布局:
+ *          1. 创建根容器(SCR_W x CONTENT_H),灰色背景;
+ *          2. 创建左侧事件表格:
+ *             - 2 列:时间(170) + 事件(剩余宽度)
+ *             - 30 行(含表头)
+ *             - 表头 "time" / "event"
+ *             - 样式:白底,深灰文字,底部边框分割
+ *          3. 创建右侧 3 个统计卡片(通过 make_card 创建);
+ *          4. 在每个卡片内添加子标签显示具体数据。
+ *
+ * @note    卡片初始显示为 0/默认值,后续由 update_event_page 更新。
+ */
 void create_event_page(lv_obj_t *parent)
 {
 
@@ -91,10 +128,33 @@ void create_event_page(lv_obj_t *parent)
     lv_obj_set_style_text_font(c3_val_lbl, FONT_CJK, 0);
     lv_obj_set_style_text_color(c3_val_lbl, connect_event == ON ? COLOR_OK : COLOR_ALARM, 0);
     lv_obj_align(c3_val_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    
+
 }
 
-/* 更新事件表格与统计卡片 */
+/**
+ * @brief   更新事件表格与统计卡片
+ * @param   event  事件文本字符串
+ *
+ * @details 工作流程:
+ *          1. 越界保护:table 为 NULL 直接返回;
+ *          2. even_line 回绕(even_line % TABLE_ROW_MAX);
+ *          3. 获取当前时间作为表格时间列;
+ *          4. 写入表格第 even_line 行;
+ *          5. even_line++;
+ *          6. 根据事件文本内容更新统计卡片:
+ *             - 含 "alarm"  : alarm_times++ 更新卡片1;
+ *             - 含 "command": command_times++ 记录时间更新卡片2;
+ *             - 含 "system" : 读 connect_event 更新卡片3。
+ *
+ * 事件文本约定:
+ *   - "alarm:..."     : 报警事件
+ *   - "command:..."   : 命令事件(来自网络)
+ *   - "system:..."    : 系统事件(连接状态变化)
+ *
+ * @note    该函数在主线程被调用(process_pending_events 或 update_home_data)。
+ *          event 字符串会被 strcpy 到表格单元格,长度无显式限制,
+ *          调用方应保证长度合理(<100 字符)。
+ */
 void update_event_page(char *event)
 {
     if(!table) return;
@@ -130,11 +190,21 @@ void update_event_page(char *event)
         lv_label_set_text(c3_val_lbl, connect_event_str(cur_connect));
         lv_obj_set_style_text_color(c3_val_lbl, cur_connect == ON ? COLOR_OK : COLOR_ALARM, 0);
     }
-    
+
 }
-/* 更新系统状态卡片 */
+
+/**
+ * @brief   更新系统状态卡片(设备运行状态)
+ *
+ * @details 根据 device_status 全局变量更新卡片3的主标签:
+ *          - ON (正常) : 显示 "normal",绿色
+ *          - OFF(报警) : 显示 "alarm",红色
+ *
+ * @note    
+ *          调用方(update_home_data)在报警与恢复时分别调用。
+ */
 void update_system_status(void)
 {
     lv_label_set_text(c3_val, device_status_str(device_status));
-    lv_obj_set_style_text_color(c3_val, device_status == OFF ? COLOR_OK : COLOR_ALARM, 0);
+    lv_obj_set_style_text_color(c3_val, device_status == ON ? COLOR_OK : COLOR_ALARM, 0);
 }

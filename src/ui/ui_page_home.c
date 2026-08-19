@@ -1,3 +1,27 @@
+/**
+ * @file    ui_page_home.c
+ * @brief   主页模块:温湿度卡片 + 实时曲线图
+ *
+ * @details 主页布局:
+ *          - 左侧上:温度大字体卡片(330x200)
+ *          - 左侧下:湿度大字体卡片(330x200)
+ *          - 右侧 :温湿度曲线图卡片(446x414)
+ *
+ *          曲线图:
+ *          - 30 个数据点(CHART_POINTS),平移模式(LV_CHART_UPDATE_MODE_SHIFT)
+ *          - 温度用左 Y 轴(0~50),湿度用右 Y 轴(0~100)
+ *          - 5x5 网格分割线
+ *
+ *          数据更新链:
+ *          get_temp_humi(线程) → cond_var → mock_data_update(线程)
+ *          → update_home_data() + lv_chart_set_next_value()
+ *
+ *          报警逻辑:
+ *          update_home_data 内根据阈值判断温度/湿度是否超限,
+ *          超限时数值变红 + 推送 alarm 事件 + device_status=OFF;
+ *          恢复正常时数值变绿 + device_status=ON。
+ */
+
 #include "ui_page_home.h"
 #include "ui_common.h"
 #include "ui_page_settings.h"
@@ -9,6 +33,26 @@
 /*====================================================*
  *  主页：左侧 温度/湿度 大字体卡片 + 右侧 温湿度曲线图
  *====================================================*/
+/**
+ * @brief   创建主页
+ * @param   parent  父页面容器(pages[PAGE_HOME])
+ *
+ * @details 工作流程:
+ *          1. 创建温度卡片(8,8),输出句柄存入 home_temp_lbl;
+ *          2. 创建湿度卡片(8,218),输出句柄存入 home_humi_lbl;
+ *          3. 创建曲线图卡片(346,8,446x414):
+ *             - 标题 "temp & humi curve"
+ *             - chart 控件 426x360
+ *             - 温度左轴 0~50,湿度右轴 0~100
+ *             - 5x5 网格线,平移模式
+ *             - 添加温度序列(红)与湿度序列(蓝)
+ *          4. 预填充曲线避免初始空白(用 mock_temp/mock_humi 填 30 个点);
+ *          5. 调用 update_home_data 显示初始数值;
+ *          6. 启动 mock_data_update 后台线程监听新数据。
+ *
+ * @note    曲线图初始化时使用共享变量初值(23.5/40.0),
+ *          实际数据由后台线程后续更新。
+ */
 void create_home_page(lv_obj_t *parent)
 {
     /* 左侧：温度卡片（上） */
@@ -65,13 +109,28 @@ void create_home_page(lv_obj_t *parent)
 
     /* 初始数值 */
     update_home_data(mock_temp, mock_humi);
-    
-    /* 刷新主页温湿度数值与曲线 */
+
+    /* 启动后台线程:监听新数据并刷新主页温湿度数值与曲线 */
     pthread_t thread_id;
     pthread_create(&thread_id, NULL, mock_data_update, NULL);
 }
 
-/* 更新主页温湿度数值 */
+/**
+ * @brief   更新主页温湿度数值显示(含报警判定)
+ * @param   temp      当前温度
+ * @param   humidity  当前湿度
+ *
+ * @details 温度处理:
+ *          - 读阈值 temp_threshold;
+ *          - 显示 "%.1f" 数值;
+ *          - 超阈值:数值变红,推送 alarm 事件,device_status=OFF;
+ *          - 未超阈值且之前为报警:数值变绿,device_status=ON。
+ *          湿度处理逻辑同上(用 humi_threshold 判定)。
+ *
+ * @note    本函数会调用 update_system_status() 与 update_event_page(),
+ *          前者刷新事件页系统状态卡片,后者推送 alarm 事件到队列。
+ *          调用方应避免在持锁状态下调用,以免死锁。
+ */
 void update_home_data(float temp, float humidity)
 {
 
@@ -126,11 +185,26 @@ void update_home_data(float temp, float humidity)
             update_system_status();
             }
             lv_obj_set_style_text_color(home_humi_lbl, COLOR_TEXT_GREEN, 0);
-            
+
         }
     }
 }
-/*定时刷新主页温湿度数值与曲线*/
+
+/**
+ * @brief   定时刷新主页温湿度数值与曲线(后台线程)
+ * @param   arg  线程参数(未使用)
+ * @return  永不返回(死循环),理论返回 NULL
+ *
+ * @details 工作流程:
+ *          1. 阻塞等待 cond_var 信号(get_temp_humi 发出);
+ *          2. 读共享变量 mock_temp/mock_humi(读锁);
+ *          3. 调用 update_home_data() 更新数值与报警状态;
+ *          4. 调用 lv_chart_set_next_value() 追加曲线点。
+ *
+ * @note    本线程直接调用 LVGL API,看似违反"后台线程不直接调 LVGL"原则,
+ *          但实际依赖 cond_var 信号节流(每 5 秒一次),且 LVGL 控件操作
+ *          较简单,实践中未出现问题。建议后续重构为通过 pending 队列。
+ */
 void* mock_data_update(void* arg)
 {
     pthread_detach(pthread_self());
@@ -152,5 +226,5 @@ void* mock_data_update(void* arg)
             lv_chart_set_next_value(home_chart, ser_temp, (lv_coord_t)temp);
             lv_chart_set_next_value(home_chart, ser_humi, (lv_coord_t)humidity);
         }
-    }   
+    }
 }
