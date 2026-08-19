@@ -116,77 +116,93 @@ void create_home_page(lv_obj_t *parent)
 }
 
 /**
- * @brief   更新主页温湿度数值显示(含报警判定)
+ * @brief   后台线程调用:阈值判定 + 状态翻转检测 + 投递主页刷新请求
  * @param   temp      当前温度
  * @param   humidity  当前湿度
  *
- * @details 温度处理:
- *          - 读阈值 temp_threshold;
- *          - 显示 "%.1f" 数值;
- *          - 超阈值:数值变红,推送 alarm 事件,device_status=OFF;
- *          - 未超阈值且之前为报警:数值变绿,device_status=ON。
- *          湿度处理逻辑同上(用 humi_threshold 判定)。
+ * @details 工作流程(全部在后台线程完成,不调用任何 LVGL API):
+ *          1. 读取阈值(temp_threshold / humi_threshold,读锁);
+ *          2. 判定 temp_alarm / humi_alarm;
+ *          3. 计算新 device_status = (任一超限) ? OFF : ON;
+ *          4. status_mutex 保护下比较并更新 device_status;
+ *             状态翻转时通过 push_pending_event 推送 alarm 事件
+ *             (事件文本含 alarm 关键字,主线程消费时会刷新统计卡片
+ *              与系统状态卡片);
+ *          5. request_home_refresh 投递主页 UI 刷新请求(覆盖式)。
  *
- * @note    本函数会调用 update_system_status() 与 update_event_page(),
- *          前者刷新事件页系统状态卡片,后者推送 alarm 事件到队列。
- *          调用方应避免在持锁状态下调用,以免死锁。
+ * @note    本函数线程安全,可在后台线程直接调用。
+ *          LVGL 调用全部由主线程 process_pending_events → update_home_ui 完成。
  */
 void update_home_data(float temp, float humidity)
 {
+    bool temp_alarm = false;
+    bool humi_alarm = false;
 
-    if(home_temp_lbl)
+    pthread_rwlock_rdlock(&threshold_rwlock);
+    float temp_thr = temp_threshold;
+    float humi_thr  = humi_threshold;
+    pthread_rwlock_unlock(&threshold_rwlock);
+
+    temp_alarm = (temp >= temp_thr);
+    humi_alarm = (humidity >= humi_thr);
+
+    uint8_t device_status = (temp_alarm || humi_alarm) ? OFF : ON;
+    bool status_flipped = false;
+
+    pthread_mutex_lock(&status_mutex);
+    if(device_status == OFF)
     {
-        pthread_rwlock_rdlock(&threshold_rwlock);
-        float threshold = temp_threshold;
-        pthread_rwlock_unlock(&threshold_rwlock);
-        lv_label_set_text_fmt(home_temp_lbl, "%.1f", temp);
-        if(temp > threshold)
-        {
+        status_flipped = true;
+    }
+    pthread_mutex_unlock(&status_mutex);
 
-            char event[128]={0};
-            sprintf(event, "alarm:Temp alert triggered, temp: %.1f", temp);
-            printf("%s\n", event);
-            device_status = OFF;
-            update_system_status();
-            update_event_page(event);
-            lv_obj_set_style_text_color(home_temp_lbl, COLOR_TEXT_RED, 0);
+    if(status_flipped)
+    {
+        char event[128] = {0};
+        if(device_status == OFF)
+        {
+            if(temp_alarm)
+                snprintf(event, sizeof(event),
+                         "alarm:Temp alert triggered, temp: %.1f", temp);
+            else
+                snprintf(event, sizeof(event),
+                         "alarm:Humi alert triggered, humi: %.1f", humidity);
         }
         else
         {
-            if(device_status == OFF)
-            {
-            device_status = ON;
-            update_system_status();
-            }
-            lv_obj_set_style_text_color(home_temp_lbl, COLOR_TEXT_GREEN, 0);
+            snprintf(event, sizeof(event),
+                     "alarm:Device recovered, temp: %.1f, humi: %.1f",
+                     temp, humidity);
         }
+        printf("%s\n", event);
+        push_pending_event(event);
+    }
+
+    request_home_refresh(temp, humidity, temp_alarm, humi_alarm);
+}
+
+/**
+ * @brief   主线程调用:更新主页温湿度数值显示与颜色(纯 LVGL 调用)
+ * @param   temp        当前温度
+ * @param   humi        当前湿度
+ * @param   temp_alarm  温度是否超阈值(红)/ 否则(绿)
+ * @param   humi_alarm  湿度是否超阈值(红)/ 否则(绿)
+ *
+ * @note    仅在主线程 process_pending_events 中调用,保证 LVGL 线程安全。
+ */
+void update_home_ui(float temp, float humi, bool temp_alarm, bool humi_alarm)
+{
+    if(home_temp_lbl)
+    {
+        lv_label_set_text_fmt(home_temp_lbl, "%.1f", temp);
+        lv_obj_set_style_text_color(home_temp_lbl,
+            temp_alarm ? COLOR_TEXT_RED : COLOR_TEXT_GREEN, 0);
     }
     if(home_humi_lbl)
     {
-        pthread_rwlock_rdlock(&threshold_rwlock);
-        float threshold = humi_threshold;
-        pthread_rwlock_unlock(&threshold_rwlock);
-        lv_label_set_text_fmt(home_humi_lbl, "%.1f", humidity);
-        if(humidity > threshold)
-        {
-            char event[128]={0};
-            sprintf(event, "alarm:Humi alert triggered, humi: %.1f", humidity);
-            printf("%s\n", event);
-            device_status = OFF;
-            update_system_status();
-            update_event_page(event);
-            lv_obj_set_style_text_color(home_humi_lbl, COLOR_TEXT_RED, 0);
-        }
-        else
-        {
-            if(device_status == OFF)
-            {
-            device_status = ON;
-            update_system_status();
-            }
-            lv_obj_set_style_text_color(home_humi_lbl, COLOR_TEXT_GREEN, 0);
-
-        }
+        lv_label_set_text_fmt(home_humi_lbl, "%.1f", humi);
+        lv_obj_set_style_text_color(home_humi_lbl,
+            humi_alarm ? COLOR_TEXT_RED : COLOR_TEXT_GREEN, 0);
     }
 }
 

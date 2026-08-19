@@ -8,6 +8,7 @@
 #define UI_PAGE_HOME_H
 
 #include "lvgl/lvgl.h"
+#include <stdbool.h>
 
 /**
  * @brief   创建主页:左侧温湿度卡片 + 右侧曲线图
@@ -17,12 +18,22 @@
 void create_home_page(lv_obj_t *parent);
 
 /**
- * @brief   更新主页温湿度数值显示(含报警判定与颜色切换)
+ * @brief   后台线程调用:阈值判定 + 状态翻转检测 + 投递主页刷新请求
  * @param   temp      当前温度
  * @param   humidity  当前湿度
- * @note    会调用 update_system_status/update_event_page,勿在持锁状态调用
+ * @note    线程安全,不调用任何 LVGL API;UI 刷新通过 request_home_refresh 投递
  */
 void update_home_data(float temp, float humidity);
+
+/**
+ * @brief   主线程调用:更新主页温湿度数值显示与颜色(纯 LVGL 调用)
+ * @param   temp        当前温度
+ * @param   humi        当前湿度
+ * @param   temp_alarm  温度是否超阈值(决定数值颜色)
+ * @param   humi_alarm  湿度是否超阈值(决定数值颜色)
+ * @note    仅在主线程 process_pending_events 中调用,保证 LVGL 线程安全
+ */
+extern void update_home_ui(float temp, float humi, bool temp_alarm, bool humi_alarm);
 
 /**
  * @brief   定时刷新主页温湿度数值与曲线(后台线程)

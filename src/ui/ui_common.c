@@ -41,7 +41,7 @@ float     mock_humi = 40.0f;             /* 当前湿度,初值 40% */
 uint8_t   connect_event = OFF;           /* TCP 连接状态,初值未连接 */
 uint8_t   LED_status = ON;                /* LED 开关状态,初值开 */
 uint8_t   BEEP_status = OFF;              /* 蜂鸣器开关状态,初值关 */
-uint8_t   device_status = ON;            /* 设备运行状态,初值正常 */
+uint8_t   device_status = ON;             /* 设备运行状态,初值正常 */
 
 /* 跨线程同步原语(在 ui_manager.c::create_ui 中初始化) */
 pthread_rwlock_t th_rwlock;               /* 主线程读写锁(保护温湿度) */
@@ -57,11 +57,12 @@ pthread_mutex_t status_mutex;            /* 保护 LED_status/BEEP_status/connec
 
 /*===================== 线程安全 UI 更新机制 =====================*/
 /* 声明外部函数避免头文件循环依赖
- * 这三个函数分别在 ui_page_event.c / ui_page_settings.c / ui_page_history.c 中定义
+ * 这四个函数分别在 ui_page_event.c / ui_page_settings.c / ui_page_history.c / ui_page_home.c 中定义
  */
 extern void update_event_page(char *event);
 extern void display_threshold(void);
 extern void display_history(int i, char *buf);
+extern void update_home_ui(float temp, float humi, bool temp_alarm, bool humi_alarm);
 
 static pthread_mutex_t pending_mutex = PTHREAD_MUTEX_INITIALIZER;  /* 保护 pending 队列的互斥锁(静态初始化) */
 static bool threshold_refresh_pending = false;                     /* 阈值刷新请求标志 */
@@ -87,6 +88,21 @@ typedef struct
     char lines[128];
 } history_event_t;
 static history_event_t history_event = {0, ""};          /* 历史更新事件(覆盖式) */
+
+/**
+ * @brief 主页刷新事件(覆盖式)
+ * @note  后台线程通过 request_home_refresh 写入,主线程 process_pending_events 消费
+ */
+typedef struct
+{
+    bool  used;
+    float temp;
+    float humi;
+    bool  temp_alarm;
+    bool  humi_alarm;
+} home_refresh_t;
+static home_refresh_t home_refresh = {false, 0, 0, false, false};
+
 static pending_event_t pending_events[MAX_PENDING_EVENTS]; /* 待处理事件环形队列 */
 
 /**
@@ -152,6 +168,8 @@ void process_pending_events(lv_timer_t *timer)
 {
     char buf[128];
     bool need_threshold_refresh = false;
+    bool need_home_refresh = false;
+    home_refresh_t hr_copy;
 
     pthread_mutex_lock(&pending_mutex);
     for(int i = 0; i < MAX_PENDING_EVENTS; i++)
@@ -171,11 +189,21 @@ void process_pending_events(lv_timer_t *timer)
         threshold_refresh_pending = false;
         need_threshold_refresh = true;
     }
+    if(home_refresh.used)
+    {
+        home_refresh.used = false;
+        hr_copy = home_refresh;
+        need_home_refresh = true;
+    }
     pthread_mutex_unlock(&pending_mutex);
 
     if(need_threshold_refresh)
     {
         display_threshold();
+    }
+    if(need_home_refresh)
+    {
+        update_home_ui(hr_copy.temp, hr_copy.humi, hr_copy.temp_alarm, hr_copy.humi_alarm);
     }
     if(history_refresh_pending)
     {
@@ -196,6 +224,31 @@ void request_threshold_refresh(void)
 {
     pthread_mutex_lock(&pending_mutex);
     threshold_refresh_pending = true;
+    pthread_mutex_unlock(&pending_mutex);
+}
+
+/**
+ * @brief   后台线程调用:请求主线程刷新主页温湿度数值与颜色
+ * @param   temp        当前温度
+ * @param   humi        当前湿度
+ * @param   temp_alarm  温度是否超阈值(决定数值颜色)
+ * @param   humi_alarm  湿度是否超阈值(决定数值颜色)
+ *
+ * @details 覆盖式更新 home_refresh,设置 used 标志。
+ *          主线程下次调用 process_pending_events 时会消费此事件。
+ *
+ * @note    调用方无需持锁,函数内部加锁。
+ *          该函数只投递 UI 刷新请求,device_status 与 alarm 事件的更新
+ *          应由调用方在调用前完成(参见 update_home_data)。
+ */
+void request_home_refresh(float temp, float humi, bool temp_alarm, bool humi_alarm)
+{
+    pthread_mutex_lock(&pending_mutex);
+    home_refresh.used = true;
+    home_refresh.temp = temp;
+    home_refresh.humi = humi;
+    home_refresh.temp_alarm = temp_alarm;
+    home_refresh.humi_alarm = humi_alarm;
     pthread_mutex_unlock(&pending_mutex);
 }
 

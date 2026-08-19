@@ -9,7 +9,7 @@
  *                         断线自动重连(5 秒间隔);
  *  - get_news (子线程)  : 接收服务器下发的 JSON 命令,解析后更新共享状态
  *                         (LED/蜂鸣器/温湿度阈值),唤醒硬件线程,推 UI 事件;
- *  - send_news(子线程) : 每 5 秒打包当前温湿度/阈值/设备状态为 JSON 上报。
+ *  - send_news(子线程) : 每获取一次数据打包当前温湿度/阈值/设备状态为 JSON 上报。
  *
  *  对外接口:
  *  - httprequest_weather(): 向 seniverse API 发起 HTTP GET 拉取广州实时天气,
@@ -198,7 +198,7 @@ void* get_news(void* arg)
  * @param   arg  指向已连接 socket fd 的指针(int*)
  * @return  send 失败时返回 NULL
  *
- * @details 每 5 秒打包一份 JSON 上报到服务器,字段包括:
+ * @details 每获取一次数据就将数据打包 JSON 上报到服务器,字段包括:
  *          time、temp、humi、LED、BEEP、temp_threshold、humi_threshold。
  *          send 失败(ret<=0)即退出线程,主线程 client 会关闭 fd 后重连。
  *
@@ -213,6 +213,11 @@ void* send_news(void* arg)
 
     while(1)
     {
+        /* 等待新数据信号 */
+        pthread_mutex_lock(&cond_mutex);
+        pthread_cond_wait(&cond_var, &cond_mutex);
+        pthread_mutex_unlock(&cond_mutex);
+
         /* 读共享温湿度 */
         char time_date[32];
         pthread_rwlock_rdlock(&th_rwlock);
@@ -252,7 +257,6 @@ void* send_news(void* arg)
         cJSON_Delete(root);
         free(json_str);
         if(ret <= 0) break;
-        sleep(5);
     }
     /* 通知主线程连接已断开 */
     pthread_mutex_lock(&status_mutex);

@@ -147,6 +147,17 @@ extern void request_threshold_refresh(void);
  */
 extern void request_history_refresh(int i, char *lines);
 
+/**
+ * @brief   后台线程调用:请求主线程刷新主页温湿度数值与颜色
+ * @param   temp        当前温度
+ * @param   humi        当前湿度
+ * @param   temp_alarm  温度是否超阈值(决定数值颜色)
+ * @param   humi_alarm  湿度是否超阈值(决定数值颜色)
+ * @note    仅保留最新一次请求(覆盖式),由主线程 process_pending_events 消费。
+ *          device_status 与 alarm 事件的更新应由调用方在调用前完成。
+ */
+extern void request_home_refresh(float temp, float humi, bool temp_alarm, bool humi_alarm);
+
 /*===================== 公共辅助函数 =====================*/
 /**
  * @brief   创建一个数据卡片(用于主页温湿度显示)

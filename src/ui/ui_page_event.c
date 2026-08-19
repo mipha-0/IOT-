@@ -173,6 +173,9 @@ void update_event_page(char *event)
     {
         alarm_times++;
         lv_label_set_text_fmt(c1_sub_lbl, "today: %d", alarm_times);
+        /* device_status 可能由后台线程在推送 alarm 事件时同步翻转,
+         * 此处刷新系统状态卡片以反映最新状态 */
+        update_system_status();
     }
     /* 命令类事件：调用方需把时间字符串通过 recent_time 传入并 command_times++*/
     if(strstr(event, "command"))
@@ -200,11 +203,16 @@ void update_event_page(char *event)
  *          - ON (正常) : 显示 "normal",绿色
  *          - OFF(报警) : 显示 "alarm",红色
  *
- * @note    
- *          调用方(update_home_data)在报警与恢复时分别调用。
+ * @note    在主线程被调用(由 update_event_page 的 alarm 分支触发,
+ *          或主页/网络路径显式调用)。读 device_status 时加 status_mutex
+ *          保证与后台线程写并发安全。
  */
 void update_system_status(void)
 {
-    lv_label_set_text(c3_val, device_status_str(device_status));
-    lv_obj_set_style_text_color(c3_val, device_status == ON ? COLOR_OK : COLOR_ALARM, 0);
+    pthread_mutex_lock(&status_mutex);
+    uint8_t cur_status = device_status;
+    pthread_mutex_unlock(&status_mutex);
+
+    lv_label_set_text(c3_val, device_status_str(cur_status));
+    lv_obj_set_style_text_color(c3_val, cur_status == ON ? COLOR_OK : COLOR_ALARM, 0);
 }

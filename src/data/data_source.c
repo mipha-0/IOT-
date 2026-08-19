@@ -63,9 +63,8 @@ void* get_temp_humi(void* arg)
 
         /* 通知 write_data_to_file 线程有新数据 */
         pthread_mutex_lock(&cond_mutex);
-        pthread_cond_signal(&cond_var);
+        pthread_cond_broadcast(&cond_var);
         pthread_mutex_unlock(&cond_mutex);
-
 
         sleep(5);
     }
