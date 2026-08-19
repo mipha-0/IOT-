@@ -179,7 +179,7 @@ void* update_history_data(void*arg)
     while(1)
     {
         memset(lines, 0, sizeof(lines));
-        for(uint16_t i = lien; ; i=(i+1)%20)
+        for(uint16_t i = lien%20; ; i=(i+1)%20)
         {
             pthread_mutex_lock(&cond_mutex);
             pthread_cond_wait(&cond_var, &cond_mutex);
@@ -189,7 +189,6 @@ void* update_history_data(void*arg)
             float temp = mock_temp;
             float humidity = mock_humi;
             pthread_rwlock_unlock(&th_rwlock);
-
             t = time(NULL);
             tm = localtime(&t);
             strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm);

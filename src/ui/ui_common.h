@@ -1,20 +1,3 @@
-/**
- * @file    ui_common.h
- * @brief   UI 共享中心:全局状态、锁、布局常量、跨线程接口声明
- *
- * @details 这是项目的"宪法"文件,集中声明所有跨模块共享的内容:
- *          1. 页面 ID 枚举(PAGE_HOME/EVENT/HISTORY/SETTINGS);
- *          2. 颜色方案、字体、布局尺寸常量;
- *          3. 状态宏与字符串化宏(ON/OFF/状态显示);
- *          4. 全局 LVGL 控件句柄(pages/nav_btns/home_*/timer_lbl);
- *          5. 共享状态变量(mock_temp/mock_humi/各种 _status);
- *          6. 同步原语(rwlock/mutex/cond);
- *          7. 跨线程 UI 更新接口(push_pending_event 等);
- *          8. 公共辅助函数(create_data_card/make_card);
- *
- *          所有后台线程通过此处声明的接口与主线程通信,
- *          严禁后台线程直接调用 LVGL API。
- */
 #ifndef UI_COMMON_H
 #define UI_COMMON_H
 

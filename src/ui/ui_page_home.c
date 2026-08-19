@@ -200,10 +200,7 @@ void update_home_data(float temp, float humidity)
  *          2. 读共享变量 mock_temp/mock_humi(读锁);
  *          3. 调用 update_home_data() 更新数值与报警状态;
  *          4. 调用 lv_chart_set_next_value() 追加曲线点。
- *
- * @note    本线程直接调用 LVGL API,看似违反"后台线程不直接调 LVGL"原则,
- *          但实际依赖 cond_var 信号节流(每 5 秒一次),且 LVGL 控件操作
- *          较简单,实践中未出现问题。建议后续重构为通过 pending 队列。
+ *  
  */
 void* mock_data_update(void* arg)
 {
