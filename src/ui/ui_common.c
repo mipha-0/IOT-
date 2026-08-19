@@ -63,10 +63,12 @@ extern void update_event_page(char *event);
 extern void display_threshold(void);
 extern void display_history(int i, char *buf);
 extern void update_home_ui(float temp, float humi, bool temp_alarm, bool humi_alarm);
+extern void update_system_status(void);
 
 static pthread_mutex_t pending_mutex = PTHREAD_MUTEX_INITIALIZER;  /* 保护 pending 队列的互斥锁(静态初始化) */
 static bool threshold_refresh_pending = false;                     /* 阈值刷新请求标志 */
 static bool history_refresh_pending = false;                       /* 历史页刷新请求标志 */
+static bool system_status_refresh_pending = false;                 /* 系统状态卡片刷新请求标志 */
 
 /**
  * @brief 待处理事件项
@@ -159,7 +161,9 @@ void request_history_refresh(int i, char *lines)
  *          2. 每取出一个,临时释放锁,调用 update_event_page() 更新 UI;
  *             (LVGL API 在持锁期间调用会延长锁持有时间,影响后台线程推入)
  *          3. 检查 threshold_refresh_pending,如为 true 则调 display_threshold();
- *          4. 检查 history_refresh_pending,如为 true 则调 display_history()。
+ *          4. 检查 home_refresh.used,如为 true 则调 update_home_ui();
+ *          5. 检查 system_status_refresh_pending,如为 true 则调 update_system_status();
+ *          6. 检查 history_refresh_pending,如为 true 则调 display_history()。
  *
  * @note    update_event_page 内部根据事件文本内容(alarm/command/system)
  *          分支更新统计卡片,因此事件文本格式需与 update_event_page 约定一致。
@@ -195,6 +199,11 @@ void process_pending_events(lv_timer_t *timer)
         hr_copy = home_refresh;
         need_home_refresh = true;
     }
+    if(system_status_refresh_pending)
+    {
+        system_status_refresh_pending = false;
+        need_status_refresh = true;
+    }
     pthread_mutex_unlock(&pending_mutex);
 
     if(need_threshold_refresh)
@@ -204,6 +213,10 @@ void process_pending_events(lv_timer_t *timer)
     if(need_home_refresh)
     {
         update_home_ui(hr_copy.temp, hr_copy.humi, hr_copy.temp_alarm, hr_copy.humi_alarm);
+    }
+    if(need_status_refresh)
+    {
+        update_system_status();
     }
     if(history_refresh_pending)
     {
@@ -224,6 +237,19 @@ void request_threshold_refresh(void)
 {
     pthread_mutex_lock(&pending_mutex);
     threshold_refresh_pending = true;
+    pthread_mutex_unlock(&pending_mutex);
+}
+
+/**
+ * @brief   后台线程调用:请求主线程刷新系统状态卡片
+ * @details 仅置位 system_status_refresh_pending 标志,
+ *          实际刷新由主线程 process_pending_events 完成。
+ *          用于设备状态由报警恢复正常时:不上报事件,只更新显示文字。
+ */
+void request_system_status_refresh(void)
+{
+    pthread_mutex_lock(&pending_mutex);
+    system_status_refresh_pending = true;
     pthread_mutex_unlock(&pending_mutex);
 }
 

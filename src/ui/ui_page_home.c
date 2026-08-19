@@ -18,8 +18,9 @@
  *
  *          报警逻辑:
  *          update_home_data 内根据阈值判断温度/湿度是否超限,
- *          超限时数值变红 + 推送 alarm 事件 + device_status=OFF;
- *          恢复正常时数值变绿 + device_status=ON。
+ *          异常态每次采集均推送 alarm 事件 + device_status=OFF,数值变红;
+ *          恢复正常时不报事件,仅刷新系统状态卡片显示 + device_status=ON,
+ *          数值变绿。严格区分异常上报与状态更新。
  */
 
 #include "ui_page_home.h"
@@ -116,7 +117,7 @@ void create_home_page(lv_obj_t *parent)
 }
 
 /**
- * @brief   后台线程调用:阈值判定 + 状态翻转检测 + 投递主页刷新请求
+ * @brief   后台线程调用:阈值判定 + 异常上报 + 状态刷新请求
  * @param   temp      当前温度
  * @param   humidity  当前湿度
  *
@@ -125,13 +126,17 @@ void create_home_page(lv_obj_t *parent)
  *          2. 判定 temp_alarm / humi_alarm;
  *          3. 计算新 device_status = (任一超限) ? OFF : ON;
  *          4. status_mutex 保护下比较并更新 device_status;
- *             状态翻转时通过 push_pending_event 推送 alarm 事件
- *             (事件文本含 alarm 关键字,主线程消费时会刷新统计卡片
- *              与系统状态卡片);
- *          5. request_home_refresh 投递主页 UI 刷新请求(覆盖式)。
+ *          5. 上报规则(异常上报 vs 状态更新严格分离):
+ *             - 异常态(temp/humi 任一超限):每次数据采集均通过
+ *               push_pending_event 推送 "alarm:..." 事件,主线程消费时
+ *               会写入事件表格 + 刷新统计卡片 + update_system_status();
+ *             - 恢复正常(翻转 OFF→ON):不上报事件,仅通过
+ *               request_system_status_refresh() 请求主线程刷新系统状态
+ *               卡片显示文字,保持界面与实际运行状态一致。
+ *          6. request_home_refresh 投递主页 UI 刷新请求(覆盖式)。
  *
  * @note    本函数线程安全,可在后台线程直接调用。
- *          LVGL 调用全部由主线程 process_pending_events → update_home_ui 完成。
+ *          LVGL 调用全部由主线程 process_pending_events 完成。
  */
 void update_home_data(float temp, float humidity)
 {
@@ -146,36 +151,35 @@ void update_home_data(float temp, float humidity)
     temp_alarm = (temp >= temp_thr);
     humi_alarm = (humidity >= humi_thr);
 
-    uint8_t device_status = (temp_alarm || humi_alarm) ? OFF : ON;
-    bool status_flipped = false;
+    uint8_t new_status = (temp_alarm || humi_alarm) ? OFF : ON;
+    bool recovered = false;
 
     pthread_mutex_lock(&status_mutex);
-    if(device_status == OFF)
+    if(device_status != new_status)
     {
-        status_flipped = true;
+        device_status = new_status;
+        /* 在报警恢复正常时记录:需要刷新系统状态卡片 */
+        recovered = (new_status == ON);
     }
     pthread_mutex_unlock(&status_mutex);
 
-    if(status_flipped)
+    if(temp_alarm || humi_alarm)
     {
+        /* 异常态:每次采集超限均上报一次报警事件 */
         char event[128] = {0};
-        if(device_status == OFF)
-        {
-            if(temp_alarm)
-                snprintf(event, sizeof(event),
-                         "alarm:Temp alert triggered, temp: %.1f", temp);
-            else
-                snprintf(event, sizeof(event),
-                         "alarm:Humi alert triggered, humi: %.1f", humidity);
-        }
-        else
-        {
+        if(temp_alarm)
             snprintf(event, sizeof(event),
-                     "alarm:Device recovered, temp: %.1f, humi: %.1f",
-                     temp, humidity);
-        }
+                     "alarm:Temp alert triggered, temp: %.1f", temp);
+        else
+            snprintf(event, sizeof(event),
+                     "alarm:Humi alert triggered, humi: %.1f", humidity);
         printf("%s\n", event);
         push_pending_event(event);
+    }
+    else if(recovered)
+    {
+        /* 请求刷新系统状态卡片显示文字 */
+        request_system_status_refresh();
     }
 
     request_home_refresh(temp, humidity, temp_alarm, humi_alarm);

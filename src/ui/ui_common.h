@@ -140,6 +140,13 @@ extern void process_pending_events(lv_timer_t *timer);
 extern void request_threshold_refresh(void);
 
 /**
+ * @brief   后台线程调用:请求主线程刷新系统状态卡片(设备运行状态)
+ * @note    仅置位标志,实际刷新由主线程 process_pending_events 完成。
+ *          用于设备状态由报警恢复正常时:不上报事件,只更新显示文字。
+ */
+extern void request_system_status_refresh(void);
+
+/**
  * @brief   后台线程调用:请求主线程刷新历史数据页(有新数据到来)
  * @param   i     数据行号(0~19)
  * @param   lines 该行的数据字符串
