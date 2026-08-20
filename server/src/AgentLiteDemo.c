@@ -227,7 +227,7 @@ void handleAuthSuccess(void* context, int messageId, int code, char *message)
 
 void handleAuthFailure(void* context, int messageId, int code, char *message)
 {
-    printfLog(EN_LOG_LEVEL_ERROR, "AgentLiteDemo: handleConnectFailure() error, messageId %d, code %d, messsage %s\n", messageId, code, message);
+    printfLog(EN_LOG_LEVEL_ERROR, "AgentLiteDemo: handleConnectFailure() error, messageId %d, code %d, messsage %s\n", messageId, code, message ? message : "(null)");
     //judge if the network is available etc. and login again
     //...
     printfLog(EN_LOG_LEVEL_ERROR, "AgentLiteDemo: handleConnectFailure() login again\n");
@@ -240,7 +240,7 @@ void handleAuthFailure(void* context, int messageId, int code, char *message)
 
 void handleConnectionLost(void* context, int messageId, int code, char *message)
 {
-    printfLog(EN_LOG_LEVEL_WARNING, "AgentLiteDemo: handleConnectionLost() warning, messageId, code %d, messsage %s\n",messageId, code, message);
+    printfLog(EN_LOG_LEVEL_WARNING, "AgentLiteDemo: handleConnectionLost() warning, messageId %d, code %d, messsage %s\n", messageId, code, message ? message : "(null)");
     //judge if the network is available etc. and login again
     //...
     int ret = IOTA_Connect();
@@ -266,7 +266,7 @@ void handleDisAuthFailure(void* context, int messageId, int code, char *message)
     {
         printfLog(EN_LOG_LEVEL_ERROR, "AgentLiteDemo: handleConnectionLost() error, login again failed, result %d\n", ret);
     }
-    printf("AgentLiteDemo: handleDisAuthFailure(), messageId %d, code %d, messsage %s\n", messageId, code, message);
+    printf("AgentLiteDemo: handleDisAuthFailure(), messageId %d, code %d, messsage %s\n", messageId, code, message ? message : "(null)");
 }
 
 void handleSubscribesuccess(void* context, int messageId, int code, char *message)
@@ -276,7 +276,7 @@ void handleSubscribesuccess(void* context, int messageId, int code, char *messag
 
 void handleSubscribeFailure(void* context, int messageId, int code, char *message)
 {
-    printfLog(EN_LOG_LEVEL_WARNING, "AgentLiteDemo: handleSubscribeFailure() warning, messageId %d, code %d, messsage %s\n", messageId, code, message);
+    printfLog(EN_LOG_LEVEL_WARNING, "AgentLiteDemo: handleSubscribeFailure() warning, messageId %d, code %d, messsage %s\n", messageId, code, message ? message : "(null)");
 }
 
 void handlePublishSuccess(void* context, int messageId, int code, char *message)
@@ -286,7 +286,7 @@ void handlePublishSuccess(void* context, int messageId, int code, char *message)
 
 void handlePublishFailure(void* context, int messageId, int code, char *message)
 {
-    printfLog(EN_LOG_LEVEL_WARNING, "AgentLiteDemo: handlePublishFailure() warning, messageId %d, code %d, messsage %s\n", messageId, code, message);
+    printfLog(EN_LOG_LEVEL_WARNING, "AgentLiteDemo: handlePublishFailure() warning, messageId %d, code %d, messsage %s\n", messageId, code, message ? message : "(null)");
 }
 
 //-------------------------------------------handle  message   arrived------------------------------------------------------------------------------

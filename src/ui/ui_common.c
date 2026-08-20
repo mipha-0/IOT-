@@ -173,6 +173,7 @@ void process_pending_events(lv_timer_t *timer)
     char buf[128];
     bool need_threshold_refresh = false;
     bool need_home_refresh = false;
+    bool need_status_refresh = false;
     home_refresh_t hr_copy;
 
     pthread_mutex_lock(&pending_mutex);
@@ -216,6 +217,7 @@ void process_pending_events(lv_timer_t *timer)
     }
     if(need_status_refresh)
     {
+        need_status_refresh = false;
         update_system_status();
     }
     if(history_refresh_pending)
