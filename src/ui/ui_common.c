@@ -15,7 +15,7 @@
  *          - 单 mutex 保护,消费时短暂释放锁以调用 LVGL。
  *
  *          依赖关系:
- *          - update_event_page() / display_threshold() / display_history()
+ *          - update_event_page() / display_threshold() / display_history() / update_home_page() / update_timer_page()
  *            通过 extern 声明,实际定义在 ui_page_*.c
  */
 
@@ -46,7 +46,7 @@ uint8_t   device_status = ON;             /* 设备运行状态,初值正常 */
 /* 跨线程同步原语(在 ui_manager.c::create_ui 中初始化) */
 pthread_rwlock_t th_rwlock;               /* 主线程读写锁(保护温湿度) */
 pthread_rwlock_t threshold_rwlock;        /* 温湿度阈值读写锁 */
-pthread_rwlock_t history_rwlock;         /* 历史数据读写锁(预留) */
+pthread_rwlock_t history_rwlock;         /* 历史数据读写锁 */
 pthread_mutex_t cond_mutex;              /* 条件变量互斥锁 */
 pthread_cond_t cond_var;                 /* 条件变量(新数据通知) */
 pthread_mutex_t led_mutex;               /* LED 控制互斥锁 */
@@ -57,7 +57,7 @@ pthread_mutex_t status_mutex;            /* 保护 LED_status/BEEP_status/connec
 
 /*===================== 线程安全 UI 更新机制 =====================*/
 /* 声明外部函数避免头文件循环依赖
- * 这四个函数分别在 ui_page_event.c / ui_page_settings.c / ui_page_history.c / ui_page_home.c 中定义
+ * 这五个函数分别在 ui_page_event.c / ui_page_settings.c / ui_page_history.c / ui_page_home.c 中定义
  */
 extern void update_event_page(char *event);
 extern void display_threshold(void);

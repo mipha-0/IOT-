@@ -208,7 +208,7 @@ void* beep_ctrl(void* arg)
         humi = mock_humi;
         pthread_rwlock_unlock(&th_rwlock);
         /*蜂鸣器控制(温度或湿度超过阈值时蜂鸣1s)*/
-        if(temp > tm_threshold || humi > hm_threshold)
+        if(temp >= tm_threshold || humi >= hm_threshold)
         {
             ioctl(beep_fd, BEEP_ON, 1);
             sleep(1);

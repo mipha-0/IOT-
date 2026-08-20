@@ -21,7 +21,8 @@ src/                      # 应用源码
         ├── ui_page_event.c/.h #   事件页：事件表格 + 统计卡片
         ├── ui_page_history.c/.h #   历史页：data.txt 表格展示
         └── ui_page_settings.c/.h #   设置页：MQTT 配置 + 阈值 + 开关
-server/
+
+server/				   #服务器源码
 ├── ClientConf.json    
 ├── conf
 ├── include                       #  头文件

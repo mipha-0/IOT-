@@ -93,6 +93,7 @@ void create_ui(void)
     /* 初始化跨线程同步原语(必须在后台线程启动前完成) */
     pthread_rwlock_init(&th_rwlock, NULL);
     pthread_rwlock_init(&threshold_rwlock, NULL);
+    pthread_rwlock_init(&history_rwlock, NULL);
     pthread_mutex_init(&cond_mutex, NULL);
     pthread_cond_init(&cond_var, NULL);
 
